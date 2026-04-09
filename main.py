@@ -507,7 +507,16 @@ def to_df(records):
     return df
 
 # ──────────────────────────── 이메일 ────────────────────────────
-def build_payslip_html(name, ym, items):
+def _logo_base64():
+    """로고를 base64로 변환 (이메일 HTML 임베드용)"""
+    try:
+        import base64
+        with open(Path(__file__).parent / "logo.png", "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
+        return ""
+
+def build_payslip_html(name, ym, items, bonuses=None):
     y, m = ym.split("-")
     title = f"[{int(m)}월 급여명세서] {name}님"
     total_gross = sum(it["gross"] for it in items)
@@ -538,8 +547,41 @@ def build_payslip_html(name, ym, items):
 <tr><td style='padding:6px 12px;color:#c33'>총 공제</td><td style='padding:6px 12px;text-align:right;color:#c33'>-{int(round(total_ded)):,}원</td></tr>
 <tr><td style='padding:6px 12px;color:#06c;font-size:17px'>실지급액</td><td style='padding:6px 12px;text-align:right;color:#06c;font-size:17px'>{int(round(total_net)):,}원</td></tr>
 </table>
-<p style='margin-top:24px;font-size:13px;color:#888'>— TRNT —</p></body></html>"""
+{_build_bonus_html(bonuses)}
+{_build_logo_html()}
+</body></html>"""
     return title, html
+
+
+def _build_bonus_html(bonuses):
+    """상여금/인센티브 별도 항목 HTML"""
+    if not bonuses:
+        return ""
+    rows_html = ""
+    for b in bonuses:
+        name = b.get("name") or b.get("이름", "")
+        amount = int(b.get("amount") or b.get("금액", 0))
+        reason = b.get("reason") or b.get("사유", "")
+        if amount > 0:
+            rows_html += (
+                f"<tr><td style='padding:4px 12px;border-bottom:1px solid #eee'>{reason or '추가 지급'}</td>"
+                f"<td style='padding:4px 12px;border-bottom:1px solid #eee;text-align:right'>{amount:,}원</td></tr>"
+            )
+    if not rows_html:
+        return ""
+    return f"""<hr style='border:none;border-top:1px solid #ddd;margin:20px 0'>
+<h4 style='margin:8px 0;color:#555'>추가 지급 내역</h4>
+<table style='border-collapse:collapse;width:100%;font-size:13px'>{rows_html}</table>"""
+
+
+def _build_logo_html():
+    """명세서 하단 로고 HTML"""
+    b64 = _logo_base64()
+    if not b64:
+        return "<p style='margin-top:24px;font-size:13px;color:#888'>— TRNT TRINITY PILATES —</p>"
+    return f"""<div style='text-align:center;margin-top:28px'>
+<img src='data:image/png;base64,{b64}' style='width:180px;opacity:0.7' alt='TRNT'>
+</div>"""
 
 def build_manager_summary_html(ym, mdf):
     y, m = ym.split("-")
@@ -1023,10 +1065,20 @@ def page_payslip():
     missing = [p for p in persons if not _get_email(p)]
     if missing: st.warning(f"이메일 미등록 ({len(missing)}명): {', '.join(missing)} → '⚙️ 설정' 메뉴에서 등록하세요.")
 
+    # 상여금/인센티브 데이터 가져오기 (정산 결과에서)
+    settlement_data = load_settlement(sel_ym)
+    bonus_map = {}
+    if settlement_data and settlement_data.get("manual"):
+        for b in settlement_data["manual"].get("bonuses", []):
+            bname = b.get("name") or b.get("이름", "")
+            if bname:
+                bonus_map.setdefault(bname, []).append(b)
+
     for person in persons:
         items = mdf[mdf["name"] == person].to_dict("records")
         email = _get_email(person)
-        title, html = build_payslip_html(person, sel_ym, items)
+        person_bonuses = bonus_map.get(person, [])
+        title, html = build_payslip_html(person, sel_ym, items, bonuses=person_bonuses)
         gross = sum(it["gross"] for it in items); ded = sum(it["공제합계"] for it in items)
         with st.expander(f"{person} · 세전 {won(gross)} · 실지급 {won(gross - ded)} · {email or '❌ 미등록'}"):
             st.components.v1.html(html, height=520, scrolling=True)
@@ -1056,7 +1108,7 @@ def page_payslip():
         sendable = [p for p in persons if _get_email(p)]
         for i, p in enumerate(sendable, 1):
             items = mdf[mdf["name"] == p].to_dict("records")
-            title, html = build_payslip_html(p, sel_ym, items)
+            title, html = build_payslip_html(p, sel_ym, items, bonuses=bonus_map.get(p, []))
             ok, msg = send_email(smtp_cfg, _get_email(p), title, html)
             log.append(f"{'✅' if ok else '❌'} {p}: {msg}"); prog.progress(i / len(sendable))
         st.write("\n\n".join(log))
@@ -1233,8 +1285,13 @@ def page_settings():
 st.set_page_config(page_title="TRNT 급여 대시보드", layout="wide")
 
 # 사이드바 메뉴 (매니저 입력은 항상 보임)
+LOGO_PATH = Path(__file__).parent / "logo.png"
+
 with st.sidebar:
-    st.title("TRNT 급여")
+    if LOGO_PATH.exists():
+        st.image(str(LOGO_PATH), use_container_width=True)
+    else:
+        st.title("TRNT 급여")
 
     ALL_PAGES = {
         "📤 매니저 입력": {"fn": page_manager_input, "login": False},
@@ -1262,6 +1319,8 @@ selected = ALL_PAGES[page]
 if selected["login"] and not st.session_state.get("authed"):
     # 로그인 필요한 페이지 → 로그인 화면 표시
     auth = _load_auth()
+    if LOGO_PATH.exists():
+        st.image(str(LOGO_PATH), width=300)
     st.title("🔐 관리자 로그인")
     st.info(f"**'{page}'** 메뉴는 관리자 로그인이 필요합니다.")
     if not auth:
