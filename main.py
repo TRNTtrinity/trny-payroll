@@ -675,6 +675,12 @@ def page_manager_input():
         st.success(f"✅ {ym} 기존 입력값이 있습니다. 수정 후 다시 저장할 수 있습니다.")
 
     st.subheader("1️⃣ 핏투데이 파일 업로드")
+    st.caption("핏투데이 시스템에서 추출한 .xlsx 파일을 올려주세요. 필요한 시트: **핏투데이케어**, **스탓교육 월별 집계**")
+    template_path = Path(__file__).parent / "template_fittoday.xlsx"
+    if template_path.exists():
+        st.download_button("📎 예시 양식 다운로드", template_path.read_bytes(),
+            file_name="핏투데이_예시양식.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     uploaded = st.file_uploader("핏투데이내역 .xlsx 파일", type=["xlsx"], key="mgr_upload")
     fittoday_data = {"fittoday": [], "academy": []}
     if uploaded:
