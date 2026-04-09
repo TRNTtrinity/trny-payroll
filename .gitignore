@@ -1,0 +1,11 @@
+# 민감 파일 - 절대 GitHub에 올리지 마세요
+.streamlit/secrets.toml
+trntpay-*.json
+data/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
